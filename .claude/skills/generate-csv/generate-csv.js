@@ -125,7 +125,7 @@ function generateHeader(columns) {
 }
 
 // メイン処理
-function generateCSV(targetSize, outputFile, columns) {
+async function generateCSV(targetSize, outputFile, columns) {
   console.log(`CSV生成を開始します...`);
   console.log(`  目標サイズ: ${targetSize.toLocaleString()} バイト`);
   console.log(`  出力ファイル: ${outputFile}`);
@@ -149,10 +149,21 @@ function generateCSV(targetSize, outputFile, columns) {
   let lastProgress = 0;
   const startTime = Date.now();
 
+  // バックプレッシャーを処理する関数
+  const writeWithBackpressure = (data) => {
+    return new Promise((resolve) => {
+      if (!writeStream.write(data)) {
+        writeStream.once('drain', resolve);
+      } else {
+        resolve();
+      }
+    });
+  };
+
   // 行を生成して書き込み
   while (currentSize < targetSize) {
     const row = generateRow(columns);
-    writeStream.write(row);
+    await writeWithBackpressure(row);
     currentSize += Buffer.byteLength(row);
 
     // 進捗表示（10%刻み）
@@ -165,29 +176,34 @@ function generateCSV(targetSize, outputFile, columns) {
 
   writeStream.end();
 
-  writeStream.on('finish', () => {
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    const actualSize = fs.statSync(outputFile).size;
+  return new Promise((resolve, reject) => {
+    writeStream.on('finish', () => {
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+      const actualSize = fs.statSync(outputFile).size;
 
-    console.log(`\n✓ 生成完了！`);
-    console.log(`  実際のサイズ: ${actualSize.toLocaleString()} バイト (${(actualSize / 1024 / 1024).toFixed(2)} MB)`);
-    console.log(`  経過時間: ${elapsed} 秒`);
-    console.log(`  ファイル: ${path.resolve(outputFile)}`);
-  });
+      console.log(`\n✓ 生成完了！`);
+      console.log(`  実際のサイズ: ${actualSize.toLocaleString()} バイト (${(actualSize / 1024 / 1024).toFixed(2)} MB)`);
+      console.log(`  経過時間: ${elapsed} 秒`);
+      console.log(`  ファイル: ${path.resolve(outputFile)}`);
+      resolve();
+    });
 
-  writeStream.on('error', (err) => {
-    console.error('エラーが発生しました:', err.message);
-    process.exit(1);
+    writeStream.on('error', (err) => {
+      console.error('エラーが発生しました:', err.message);
+      reject(err);
+    });
   });
 }
 
 // スクリプト実行
-try {
-  const config = parseArgs();
-  const targetSize = parseSize(config.size);
-  generateCSV(targetSize, config.output, config.columns);
-} catch (error) {
-  console.error('エラー:', error.message);
-  console.error('\nヘルプを表示するには: /generate-csv --help');
-  process.exit(1);
-}
+(async () => {
+  try {
+    const config = parseArgs();
+    const targetSize = parseSize(config.size);
+    await generateCSV(targetSize, config.output, config.columns);
+  } catch (error) {
+    console.error('エラー:', error.message);
+    console.error('\nヘルプを表示するには: /generate-csv --help');
+    process.exit(1);
+  }
+})();
